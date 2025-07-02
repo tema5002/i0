@@ -1,6 +1,4 @@
-<p align="right">
-    <img src=".readmes/i0.png" width="150" height="150" alt="i0 logo">
-</p>
+<img src=".readmes/i0.png" align="right" width="150" height="150" alt="i0 logo">
 
 # i0
 i0 is a minimal init system where task start, status, and
