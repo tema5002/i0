@@ -2,7 +2,7 @@
 // Copyright (c) 2025 tema5002
 // Licensed under the ISC License
 
-#define I0_VERSION "beta.1"
+#define I0_VERSION "beta.1.1"
 #define I0_VERSION_FULL "i0 " I0_VERSION
 
 #include <errno.h>
@@ -94,7 +94,7 @@ static inline int i0_get_local_tasks_dir(i0_string path) {
     i0_string_append(path, 0, home, len);
 
     // you are a weird person if '/' is your home
-    if (len < 2 || path[len - 1] != '/') len--;
+    if (len < 2 || path[len - 1] == '/') len--;
     i0_string_append(path, len, I0_LOCAL_TASKS_DIR, conststrlen(I0_LOCAL_TASKS_DIR) + 1);
     return 1;
 }
