@@ -2,7 +2,7 @@
 // Copyright (c) 2025 tema5002
 // Licensed under the ISC License
 
-#define I0_VERSION "beta.1.1"
+#define I0_VERSION "beta.1.2"
 #define I0_VERSION_FULL "i0 " I0_VERSION
 
 #include <errno.h>
@@ -496,6 +496,7 @@ static inline void i0_task_new() {
         fclose(f);
     }
 
+    task_path[task_path_size] = '\0';
     i0_log(I0_LOG_GOOD, i0_lang[I0_LANG_NEW_TASK_CREATED], task_path);
 }
 

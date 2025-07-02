@@ -18,7 +18,7 @@ Enable autostart? [y/N]: n
 Make start template script? [y/N]: n
 Make stop template script? [y/N]: n
 Make status template script? [y/N]: n
-[+] successfully created task at /home/tema5002/.config/i0/tasks/myapp/description
+[+] successfully created task at /home/tema5002/.config/i0/tasks/myapp
 ```
 
 ### Run the task
