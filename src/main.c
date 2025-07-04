@@ -2,9 +2,10 @@
 // Copyright (c) 2025 tema5002
 // Licensed under the ISC License
 
-#define I0_VERSION "beta.1.2"
+#define I0_VERSION "beta.1.3"
 #define I0_VERSION_FULL "i0 " I0_VERSION
 
+#include <dirent.h>
 #include <errno.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -17,13 +18,60 @@
 #include <unistd.h>
 #include <ftw.h>
 
-#include "logging.c"
 #include "lang/lang.c"
+
+typedef enum i0_log_type {
+    I0_LOG_INFO = 0,
+    I0_LOG_GOOD,
+    I0_LOG_BAD,
+    I0_LOG_TASK_START,
+    I0_LOG_TASK_STOP,
+    I0_LOG_WARNING,
+    I0_LOG_CRITICAL
+} i0_log_type;
+
+#define I0_MIN_LOG_LEVEL I0_LOG_INFO
+#define I0_MAX_LOG_LEVEL I0_LOG_CRITICAL
+
+static char i0_log_type_char[I0_MAX_LOG_LEVEL - I0_MIN_LOG_LEVEL + 1] = {
+    '+',
+    '+',
+    '-',
+    '>',
+    '<',
+    '!',
+    'x'
+};
+
+static char* const i0_log_type_color[I0_MAX_LOG_LEVEL - I0_MIN_LOG_LEVEL + 1] = {
+    "\033[37m",   // I0_LOG_INFO       -> white
+    "\033[32m",   // I0_LOG_GOOD       -> green
+    "\033[37m",   // I0_LOG_BAD        -> white
+    "\033[32m",   // I0_LOG_TASK_START -> green
+    "\033[32m",   // I0_LOG_TASK_STOP  -> green
+    "\033[33m",   // I0_LOG_WARNING    -> yellow
+    "\033[1;31m", // I0_LOG_CRITICAL   -> bright red
+};
+
+// va_list is a dark magic for compiler so i use __VA_ARGS__
+#define i0_log(level, ...) do { \
+    FILE* _stream = (level) < I0_LOG_WARNING ? stdout : stderr; \
+    fputs(i0_log_type_color[level], _stream); \
+    fprintf(_stream, "[%c] ", i0_log_type_char[level]); \
+    fprintf(_stream, __VA_ARGS__); \
+    fputs("\033[0m\n", _stream); \
+    fflush(_stream); \
+    if ((level) == I0_LOG_CRITICAL) _exit(EXIT_FAILURE); \
+} while(0)
+
+static void i0_perror(const char* prefix) {
+    i0_log(I0_LOG_CRITICAL, "%s: %s", prefix, strerror(errno));
+}
 
 typedef char i0_string[4096];
 
 #define I0_MAIN_SCRIPT "#!/bin/sh\n" \
-    "%s\n"
+    "exec %s\n"
 
 #define I0_START_SCRIPT "#!/bin/sh\n" \
     "[ -f pid ] && pid=$(cat pid) && [ -d \"/proc/$pid\" ] && echo \"%s\" && exit\n" \
@@ -57,26 +105,34 @@ typedef char i0_string[4096];
 
 #define safe_execlp(...) do { if (execlp(__VA_ARGS__) == -1) { i0_perror("execlp()"); } } while (0)
 
-static inline pid_t safe_fork() {
-    const pid_t pid = fork();
-    if (pid < 0) {
-        i0_perror("fork()");
-    }
-    return pid;
+#define fork_and_do(pid, thing, another_thing) do { \
+    pid = fork(); if (pid < 0) { i0_perror("fork()"); } \
+    else if (pid == 0) { thing; _exit(EXIT_SUCCESS); } \
+    else { another_thing; } \
+} while (0)
+
+#define fork_and_do_no_pid(thing, another_thing) do { \
+    pid_t pid; fork_and_do(pid, thing, another_thing); \
+} while (0)
+
+static int is_process_alive(const pid_t pid) {
+    return kill(pid, 0) == 0 || errno == EPERM;
 }
+
+#define i0_nop do {} while(0)
 
 // =========================================== //
 // string work                                 //
 // =========================================== //
 
-static inline void i0_string_append(char *dest, size_t dest_size, const char *suff, size_t suff_size) {
+static void i0_string_append(char *dest, size_t dest_size, const char *suff, size_t suff_size) {
     if (dest_size + suff_size + 1 > sizeof(i0_string)) {
-        i0_log(I0_LOG_CRITICAL, i0_lang[I0_LANG_ERROR_BUFFER_OVERFLOW]);
+        i0_log(I0_LOG_CRITICAL, "%s", i0_lang[I0_LANG_ERROR_BUFFER_OVERFLOW]);
     }
     memcpy(dest + dest_size, suff, suff_size);
 }
 
-static inline int str_eq(const char* a, const char* b) {
+static int str_eq(const char* a, const char* b) {
     return strcmp(a, b) == 0;
 }
 
@@ -86,9 +142,9 @@ static inline int str_eq(const char* a, const char* b) {
 // path work                                   //
 // =========================================== //
 
-static inline int i0_get_local_tasks_dir(i0_string path) {
+static void i0_get_local_tasks_dir(i0_string path) {
     const char* home = getenv("HOME");
-    if (home == NULL) return 0;
+    if (home == NULL) i0_log(I0_LOG_CRITICAL, "%s", i0_lang[I0_LANG_ERROR_NO_HOME]);
 
     size_t len = strlen(home);
     i0_string_append(path, 0, home, len);
@@ -96,23 +152,31 @@ static inline int i0_get_local_tasks_dir(i0_string path) {
     // you are a weird person if '/' is your home
     if (len < 2 || path[len - 1] == '/') len--;
     i0_string_append(path, len, I0_LOCAL_TASKS_DIR, conststrlen(I0_LOCAL_TASKS_DIR) + 1);
-    return 1;
 }
 
-static inline void i0_get_system_tasks_dir(i0_string path) {
+static void i0_get_system_tasks_dir(i0_string path) {
     i0_string_append(path, 0, I0_PUBLIC_TASKS_DIR, conststrlen(I0_PUBLIC_TASKS_DIR) + 1);
+}
+
+static void i0_get_tasks_dir(i0_string path) {
+    if (geteuid() == 0) {
+        i0_get_system_tasks_dir(path);
+    }
+    else {
+        i0_get_local_tasks_dir(path);
+    }
 }
 
 // =========================================== //
 // directory work                              //
 // =========================================== //
 
-static inline int dir_exists(const char* path) {
+static int dir_exists(const char* path) {
     struct stat st;
     return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-static inline void safe_mkdir(i0_string path) {
+static void safe_mkdir(i0_string path) {
     if (!dir_exists(path)) {
         if (mkdir(path, 0755) != 0) {
             i0_perror("mkdir()");
@@ -120,7 +184,7 @@ static inline void safe_mkdir(i0_string path) {
     }
 }
 
-static inline void mkdir_p(i0_string path) {
+static void mkdir_p(i0_string path) {
     for (char *p = path + 1; ; p++) {
         if (*p == '/' || *p == '\0') {
             const char c = *p;
@@ -132,13 +196,14 @@ static inline void mkdir_p(i0_string path) {
     }
 }
 
-static inline int unlink_cb(const char* fpath, const struct stat*, int, struct FTW*) {
+static int unlink_cb(const char* fpath, const struct stat* _1, int _2, struct FTW* _3) {
+    (void)_1; (void)_2; (void)_3;
     const int ret = remove(fpath);
     if (ret) i0_perror(fpath);
     return ret;
 }
 
-static inline int rmdir_rf(const char *path) {
+static int rmdir_rf(const char *path) {
     return nftw(path, unlink_cb, 64, FTW_DEPTH | FTW_PHYS);
 }
 
@@ -146,7 +211,7 @@ static inline int rmdir_rf(const char *path) {
 // work with files                             //
 // =========================================== //
 
-static inline FILE* safe_fopen(const char* path, const char* mode) {
+static FILE* safe_fopen(const char* path, const char* mode) {
     FILE* f = fopen(path, mode);
     if (f == NULL) {
         i0_perror("fopen()");
@@ -154,30 +219,28 @@ static inline FILE* safe_fopen(const char* path, const char* mode) {
     return f;
 }
 
-#define rwxr_xr_x 0755
+#define rwxr_xr_x (S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH)
 
-/*
-static inline safe_read(void* ptr, const size_t n, FILE* file) {
-    if (fread(ptr, 1, n, file) != n) {
-        i0_perror("fread()");
-    }
-}
-*/
-
-static inline void safe_fwrite(const void* ptr, const size_t n, FILE* file) {
+static void safe_fwrite(const void* ptr, const size_t n, FILE* file) {
     if (fwrite(ptr, 1, n, file) != n) {
         i0_perror("fwrite()");
     }
 }
 
-static inline void open_write(i0_string path, const char* content, const size_t size) {
+static void open_write(const char* path, const char* content, const size_t size) {
     FILE* f = safe_fopen(path, "w");
     safe_fwrite(content, size, f);
     fclose(f);
     chmod(path, rwxr_xr_x);
 }
 
-static inline int file_exists(const char* path) {
+static void open_write_int(const char* path, const int i) {
+    FILE* f = safe_fopen(path, "w");
+    fprintf(f, "%d\n", i);
+    fclose(f);
+}
+
+static int file_exists(const char* path) {
     return access(path, X_OK) == 0;
 }
 
@@ -185,13 +248,13 @@ static inline int file_exists(const char* path) {
 // work with input                             //
 // =========================================== //
 
-static inline void safe_fgets(char* ptr, const int n, FILE* file) {
+static void safe_fgets(char* ptr, const int n, FILE* file) {
     if (!fgets(ptr, n, file)) {
         i0_perror("fgets()");
     }
 }
 
-static inline void i0_clear_stdin(char* buf) {
+static void i0_clear_stdin(char* buf) {
     const size_t len = strlen(buf);
     if (len > 0 && buf[len - 1] != '\n') {
         while (getchar() != '\n' && !feof(stdin)) ;
@@ -201,14 +264,13 @@ static inline void i0_clear_stdin(char* buf) {
     }
 }
 
-
 typedef enum { i0_no, i0_yes } i0_yesno;
 
-static inline i0_yesno i0_prompt_yesno(const i0_yesno def, const char* format, ...) {
+static i0_yesno i0_prompt_yesno(const i0_yesno def, const char* format, ...) {
     char line[8];
     for (;;) {
         const char* y = def == i0_yes ? i0_lang[I0_LANG_IO_Y_UPPERCASE] : i0_lang[I0_LANG_IO_Y_LOWERCASE];
-        const char* n = def == i0_no  ? i0_lang[I0_LANG_IO_N_UPPERCASE] : i0_lang[I0_LANG_IO_N_LOWERCASE];
+        const char* n = def == i0_no ? i0_lang[I0_LANG_IO_N_UPPERCASE] : i0_lang[I0_LANG_IO_N_LOWERCASE];
 
         va_list args;
         va_start(args, format);
@@ -233,7 +295,7 @@ static inline i0_yesno i0_prompt_yesno(const i0_yesno def, const char* format, .
     }
 }
 
-static inline void i0_read_prompt(i0_string buf, char* prompt, const int required) {
+static void i0_read_prompt(i0_string buf, char* prompt, const int required) {
     do {
         printf("%s", prompt);
         safe_fgets(buf, sizeof(i0_string), stdin);
@@ -245,39 +307,26 @@ static inline void i0_read_prompt(i0_string buf, char* prompt, const int require
 // actual i0 functionality                     //
 // =========================================== //
 
-static inline void i0_task_find(const char* name, i0_string path) {
-    const size_t name_size = strlen(name) + 1;
+static void i0_task_find(const char* name, i0_string path) {
+    i0_get_tasks_dir(path);
+    i0_string_append(path, strlen(path), name, strlen(name) + 1);
 
-    if (i0_get_local_tasks_dir(path)) {
-        i0_string_append(path, strlen(path), name, name_size);
-        if (dir_exists(path)) return;
+    if (!dir_exists(path)) {
+        i0_log(I0_LOG_CRITICAL, "%s", i0_lang[I0_LANG_ERROR_TASK_NOT_FOUND]);
     }
-
-    i0_get_system_tasks_dir(path);
-    i0_string_append(path, conststrlen(I0_PUBLIC_TASKS_DIR), name, name_size);
-    if (dir_exists(path)) return;
-
-    i0_log(I0_LOG_CRITICAL, i0_lang[I0_LANG_ERROR_TASK_NOT_FOUND]);
 }
 
-static inline void i0_task_new() {
-    const i0_yesno is_system = i0_prompt_yesno(i0_no, "%s", i0_lang[I0_LANG_NEW_LOCAL_OR_SYSTEM]);
-
+static void i0_task_new() {
     i0_string task_name;
     i0_read_prompt(task_name, i0_lang[I0_LANG_NEW_NAME], 1);
 
     i0_string task_path;
-    if (is_system) {
-        i0_get_system_tasks_dir(task_path);
-    }
-    else {
-        i0_get_local_tasks_dir(task_path);
-    }
+    i0_get_tasks_dir(task_path);
 
     size_t task_path_size = strlen(task_path);
     const size_t task_name_size = strlen(task_name);
     if (task_name_size + task_path_size > sizeof(task_path)) {
-        i0_log(I0_LOG_CRITICAL, i0_lang[I0_LANG_NEW_PATH_TOO_LONG]);
+        i0_log(I0_LOG_CRITICAL, "%s", i0_lang[I0_LANG_NEW_PATH_TOO_LONG]);
     }
 
     i0_string_append(task_path, task_path_size, task_name, task_name_size);
@@ -500,11 +549,11 @@ static inline void i0_task_new() {
     i0_log(I0_LOG_GOOD, i0_lang[I0_LANG_NEW_TASK_CREATED], task_path);
 }
 
-static inline void i0_task_start(const char* task) {
+static void i0_task_start(const char* task) {
     FILE* f = fopen("./pid", "r");
     if (f) {
         pid_t pid;
-        if (fscanf(f, "%d", &pid) == 1 && kill(pid, 0) == 0) {
+        if (fscanf(f, "%d", &pid) == 1 && is_process_alive(pid)) {
             char pidbuf[16];
             snprintf(pidbuf, 16, "%d", pid);
             i0_log(I0_LOG_WARNING, i0_lang[I0_LANG_STATUS_ALREADY_RUNNING], pidbuf);
@@ -514,20 +563,13 @@ static inline void i0_task_start(const char* task) {
         fclose(f);
     }
 
-    const pid_t child = safe_fork();
-
-    if (child == 0) {
-        safe_execlp("./main", task, NULL);
-    }
-
-    f = safe_fopen("./pid", "w");
-    fprintf(f, "%d\n", child);
-    fclose(f);
+    pid_t pid;
+    fork_and_do(pid, safe_execlp("./main", task, NULL), open_write_int("./pid", pid));
 
     i0_log(I0_LOG_TASK_START, i0_lang[I0_LANG_STATUS_STARTED], task);
 }
 
-static inline void i0_task_start_script(const char* task, const char* path) {
+static void i0_task_start_script(const char* task, const char* path) {
     if (chdir(path) != 0) {
         i0_perror("chdir");
     }
@@ -545,24 +587,24 @@ static inline void i0_task_start_script(const char* task, const char* path) {
     i0_log(I0_LOG_CRITICAL, "%s", i0_lang[I0_LANG_ERROR_MAIN_NOT_FOUND]);
 }
 
-static inline void i0_task_stop(const char* task) {
+static void i0_task_stop(const char* task) {
     FILE* f = fopen("./pid", "r");
     if (!f) {
-        i0_log(I0_LOG_WARNING, i0_lang[I0_LANG_STATUS_ALREADY_STOPPED]);
+        i0_log(I0_LOG_WARNING, "%s", i0_lang[I0_LANG_STATUS_ALREADY_STOPPED]);
         return;
     }
 
     pid_t pid = -1;
     if (fscanf(f, "%d", &pid) != 1) {
         fclose(f);
-        i0_log(I0_LOG_WARNING, i0_lang[I0_LANG_STATUS_ALREADY_STOPPED]);
+        i0_log(I0_LOG_WARNING, "%s", i0_lang[I0_LANG_STATUS_ALREADY_STOPPED]);
         return;
     }
     fclose(f);
 
-    if (kill(pid, 0) != 0) {
+    if (!is_process_alive(pid)) {
         unlink("./pid");
-        i0_log(I0_LOG_WARNING, i0_lang[I0_LANG_STATUS_ALREADY_STOPPED]);
+        i0_log(I0_LOG_WARNING, "%s", i0_lang[I0_LANG_STATUS_ALREADY_STOPPED]);
         return;
     }
 
@@ -575,7 +617,7 @@ static inline void i0_task_stop(const char* task) {
     i0_log(I0_LOG_TASK_STOP, i0_lang[I0_LANG_STATUS_STOPPED], task);
 }
 
-static inline void i0_task_stop_script(const char* task, const char* path) {
+static void i0_task_stop_script(const char* task, const char* path) {
     if (chdir(path) != 0) {
         i0_perror("chdir");
     }
@@ -588,7 +630,7 @@ static inline void i0_task_stop_script(const char* task, const char* path) {
     i0_task_stop(task);
 }
 
-static inline void i0_task_status() {
+static void i0_task_status() {
     if (file_exists("./enabled")) i0_log(I0_LOG_GOOD, "enabled");
 
     FILE* f = fopen("./description", "r");
@@ -612,7 +654,7 @@ static inline void i0_task_status() {
     f = fopen("./pid", "r");
     if (f) {
         pid_t pid;
-        if (fscanf(f, "%d", &pid) == 1 && kill(pid, 0) == 0) {
+        if (fscanf(f, "%d", &pid) == 1 && is_process_alive(pid)) {
             char pidbuf[16];
             snprintf(pidbuf, 16, "%d", pid);
             i0_log(I0_LOG_GOOD, i0_lang[I0_LANG_STATUS_RUNNING], pidbuf);
@@ -641,10 +683,10 @@ static inline void i0_task_status() {
     else goto not_running;
     return;
     not_running:
-        i0_log(I0_LOG_BAD, i0_lang[I0_LANG_STATUS_NOT_RUNNING]);
+        i0_log(I0_LOG_BAD, "%s", i0_lang[I0_LANG_STATUS_NOT_RUNNING]);
 }
 
-static inline void i0_task_status_script(const char* task, const char* path) {
+static void i0_task_status_script(const char* task, const char* path) {
     if (chdir(path) != 0) {
         i0_perror("chdir");
     }
@@ -657,16 +699,55 @@ static inline void i0_task_status_script(const char* task, const char* path) {
     i0_task_status();
 }
 
+static void i0_boot_scan(i0_string path) {
+    DIR* d = opendir(path);
+    if (!d) {
+        if (errno == ENOENT) return;
+        i0_perror("opendir()");
+    }
+
+    struct dirent* dir;
+    const size_t path_len = strlen(path);
+    while ((dir = readdir(d)) != NULL) {
+        const char* filename = dir->d_name;
+
+        if (str_eq(dir->d_name, ".") || str_eq(dir->d_name, "..")) {
+            continue;
+        }
+
+        const size_t filename_len = strlen(filename);
+
+        i0_string_append(path, path_len, filename, filename_len + 1);
+        if (dir_exists(path)) {
+            const size_t path_filename_len = path_len + filename_len;
+            i0_string_append(path, path_filename_len, "/enabled", conststrlen("/enabled") + 1);
+
+            if (file_exists(path)) {
+                fork_and_do_no_pid(i0_task_start_script(dir->d_name, path), i0_nop);
+            }
+        }
+    }
+    closedir(d);
+}
+
+static void i0_boot() {
+    i0_log(I0_LOG_INFO, "%s", i0_lang[I0_LANG_BOOT_START]);
+
+    i0_string path;
+
+    i0_get_tasks_dir(path);
+    i0_boot_scan(path);
+
+    i0_log(I0_LOG_INFO, "%s", i0_lang[I0_LANG_BOOT_END]);
+}
+
 #define i0_task_find_and_do(task, thing) do { \
     i0_string path; \
     i0_task_find(task, path); \
-    const pid_t child = safe_fork(); \
-    if (child == 0) { \
-        thing(task, path); \
-    } \
+    fork_and_do_no_pid(thing(task, path), i0_nop); \
 } while (0)
 
-int main(int argc, char** argv) {
+int main(const int argc, const char** argv) {
     i0_get_lang();
 
     if (argc < 2) {
@@ -682,6 +763,14 @@ int main(int argc, char** argv) {
         safe_execlp("man", "man", "i0", NULL);
     }
 
+    if (str_eq(argv[1], "boot")) {
+        if (geteuid() != 0) {
+            i0_log(I0_LOG_CRITICAL, "%s", i0_lang[I0_LANG_ERROR_BOOT_NO_PERMISSION]);
+        }
+        i0_boot();
+        return EXIT_SUCCESS;
+    }
+
     if (str_eq(argv[1], "new")) {
         i0_task_new();
         return EXIT_SUCCESS;
@@ -689,7 +778,7 @@ int main(int argc, char** argv) {
 
     if (str_eq(argv[1], "start")) {
         if (argc < 3) {
-            i0_log(I0_LOG_CRITICAL, i0_lang[I0_LANG_ERROR_NO_START_ARG]);
+            i0_log(I0_LOG_CRITICAL, "%s", i0_lang[I0_LANG_ERROR_NO_START_ARG]);
         }
         i0_task_find_and_do(argv[2], i0_task_start_script);
         return EXIT_SUCCESS;
@@ -697,7 +786,7 @@ int main(int argc, char** argv) {
 
     if (str_eq(argv[1], "stop")) {
         if (argc < 3) {
-            i0_log(I0_LOG_CRITICAL, i0_lang[I0_LANG_ERROR_NO_STOP_ARG]);
+            i0_log(I0_LOG_CRITICAL, "%s", i0_lang[I0_LANG_ERROR_NO_STOP_ARG]);
         }
         i0_task_find_and_do(argv[2], i0_task_stop_script);
         return EXIT_SUCCESS;
@@ -705,11 +794,11 @@ int main(int argc, char** argv) {
 
     if (str_eq(argv[1], "status")) {
         if (argc < 3) {
-            i0_log(I0_LOG_CRITICAL, i0_lang[I0_LANG_ERROR_NO_STATUS_ARG]);
+            i0_log(I0_LOG_CRITICAL, "%s", i0_lang[I0_LANG_ERROR_NO_STATUS_ARG]);
         }
         i0_task_find_and_do(argv[2], i0_task_status_script);
         return EXIT_SUCCESS;
     }
 
-    i0_log(I0_LOG_CRITICAL, i0_lang[I0_LANG_ERROR_UNKNOWN_COMMAND]);
+    i0_log(I0_LOG_CRITICAL, "%s", i0_lang[I0_LANG_ERROR_UNKNOWN_COMMAND]);
 }

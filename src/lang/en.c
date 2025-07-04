@@ -8,6 +8,7 @@
 static void io_lang_use_en() {
     i0_lang[I0_LANG_ERROR_NO_ARGS] = "error: no arguments provided. try '%s help'";
     i0_lang[I0_LANG_ERROR_UNKNOWN_COMMAND] = "error: unknown command";
+    i0_lang[I0_LANG_ERROR_BOOT_NO_PERMISSION] = "error: 'boot' must be run as root";
     i0_lang[I0_LANG_ERROR_NO_START_ARG] = "error: nothing to start";
     i0_lang[I0_LANG_ERROR_NO_STOP_ARG] = "error: nothing to stop";
     i0_lang[I0_LANG_ERROR_NO_STATUS_ARG] = "error: nothing to status";
@@ -44,4 +45,7 @@ static void io_lang_use_en() {
     i0_lang[I0_LANG_STATUS_STARTED_AT] = "started at: %s";
     i0_lang[I0_LANG_STATUS_ALREADY_STOPPED] = "already stopped";
     i0_lang[I0_LANG_STATUS_ALREADY_RUNNING] = "already running with PID %s";
+
+    i0_lang[I0_LANG_BOOT_START] = "starting boot sequence";
+    i0_lang[I0_LANG_BOOT_END] = "boot sequence ended";
 }

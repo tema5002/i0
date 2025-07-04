@@ -10,7 +10,6 @@ No daemons, no configs, no magic.
 ### Create task layout
 ```
 $ i0 new
-Create as system task (needs sudo)? [y/N]: n
 Task name: myapp
 Command to run task: sleep 20
 Description for task (optional): this is a test task for i0
