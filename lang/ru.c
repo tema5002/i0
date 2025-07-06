@@ -8,12 +8,15 @@
 static void io_lang_use_ru() {
     i0_lang[I0_LANG_ERROR_NO_ARGS] = "ошибка: аргументы не указаны. попробуйте '%s help'";
     i0_lang[I0_LANG_ERROR_UNKNOWN_COMMAND] = "ошибка: неизвестная команда";
+    i0_lang[I0_LANG_ERROR_BOOT_NO_PERMISSION] = "ошибка: 'boot' доступен только суперпользователю";
     i0_lang[I0_LANG_ERROR_NO_START_ARG] = "ошибка: нечего запускать";
     i0_lang[I0_LANG_ERROR_NO_STOP_ARG] = "ошибка: нечего завершать";
     i0_lang[I0_LANG_ERROR_NO_STATUS_ARG] = "ошибка: нечего проверять";
     i0_lang[I0_LANG_ERROR_TASK_NOT_FOUND] = "ошибка: задача не найдена";
     i0_lang[I0_LANG_ERROR_DIRECTORY_NOT_FOUND] = "ошибка: директория не найдена";
     i0_lang[I0_LANG_ERROR_MAIN_NOT_FOUND] = "ошибка: main скрипт не найден";
+    i0_lang[I0_LANG_ERROR_BUFFER_OVERFLOW] = "ошибка: переполнение буфера";
+    i0_lang[I0_LANG_ERROR_NO_HOME] = "ошибка: переменная окружения HOME не установлена";
 
     i0_lang[I0_LANG_IO_Y_UPPERCASE] = "Д";
     i0_lang[I0_LANG_IO_Y_LOWERCASE] = "д";
@@ -42,4 +45,7 @@ static void io_lang_use_ru() {
     i0_lang[I0_LANG_STATUS_STARTED_AT] = "запущено в";
     i0_lang[I0_LANG_STATUS_ALREADY_STOPPED] = "уже остановлено";
     i0_lang[I0_LANG_STATUS_ALREADY_RUNNING] = "уже запущено с PID %s";
+
+    i0_lang[I0_LANG_BOOT_START] = "загрузка начата";
+    i0_lang[I0_LANG_BOOT_END] = "загрузка завершена";
 }

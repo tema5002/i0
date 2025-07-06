@@ -2,7 +2,7 @@
 // Copyright (c) 2025 tema5002
 // Licensed under the ISC License
 
-#define I0_VERSION "beta.1.4"
+#define I0_VERSION "beta.1.5"
 #define I0_VERSION_FULL "i0 " I0_VERSION
 
 #include <dirent.h>
@@ -183,7 +183,7 @@ static void safe_mkdir(i0_string path) {
 }
 
 static void mkdir_p(i0_string path) {
-  for (char* p = path + 1;; p++) {
+    for (char* p = path + 1;; p++) {
         if (*p == '/' || *p == '\0') {
             const char c = *p;
             *p = '\0';
@@ -592,7 +592,7 @@ static void i0_task_stop(const char* task) {
         return;
     }
 
-    pid_t pid = -1;
+    pid_t pid;
     if (fscanf(f, "%d", &pid) != 1) {
         fclose(f);
         i0_log(I0_LOG_WARNING, "%s", i0_lang[I0_LANG_STATUS_ALREADY_STOPPED]);
@@ -607,7 +607,13 @@ static void i0_task_stop(const char* task) {
     }
 
     if (kill(pid, SIGKILL) != 0) {
-        i0_perror("kill()");
+        if (errno == ESRCH) {
+            unlink("pid");
+            i0_log(I0_LOG_WARNING, "%s", i0_lang[I0_LANG_STATUS_ALREADY_STOPPED]);
+        }
+        else {
+            i0_perror("kill()");
+        }
         return;
     }
 
@@ -745,14 +751,13 @@ static void i0_boot() {
     fork_and_do_no_pid(thing(task, path), ;); \
 } while (0)
 
-
 #define i0_task_find_and_do_no_fork(task, thing) do { \
     i0_string path; \
     i0_task_find(task, path); \
     thing(task, path); \
 } while (0)
 
-int main(const int argc, const char** argv) {
+int main(const int argc, const char* argv[]) {
     i0_get_lang();
 
     if (argc < 2) {
