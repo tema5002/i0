@@ -17,6 +17,7 @@ static void io_lang_use_en() {
     i0_lang[I0_LANG_ERROR_MAIN_NOT_FOUND] = "error: main script not found";
     i0_lang[I0_LANG_ERROR_BUFFER_OVERFLOW] = "error: buffer overflow";
     i0_lang[I0_LANG_ERROR_NO_HOME] = "error: HOME environment variable is not set";
+    i0_lang[I0_LANG_ERROR_START_FAIL] = "error: start script failed";
 
     i0_lang[I0_LANG_IO_Y_UPPERCASE] = "Y";
     i0_lang[I0_LANG_IO_Y_LOWERCASE] = "y";

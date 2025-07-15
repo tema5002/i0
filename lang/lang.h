@@ -3,8 +3,8 @@
 // Licensed under the ISC License
 #pragma once
 
-#include "en.c"
-#include "ru.c"
+#include "en.h"
+#include "ru.h"
 
 static void i0_get_lang() {
     const char *env = getenv("LC_ALL");

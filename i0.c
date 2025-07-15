@@ -2,7 +2,7 @@
 // Copyright (c) 2025 tema5002
 // Licensed under the ISC License
 
-#define I0_VERSION "beta.1.5"
+#define I0_VERSION "beta.1.6"
 #define I0_VERSION_FULL "i0 " I0_VERSION
 
 #include <dirent.h>
@@ -12,13 +12,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <spawn.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include <ftw.h>
 
-#include "lang/lang.c"
+#include "lang/lang.h"
 
 typedef enum i0_log_type {
     I0_LOG_INFO = 0,
@@ -111,19 +113,32 @@ typedef char i0_string[4096];
     else { another_thing; } \
 } while (0)
 
-#define fork_and_do_no_pid(thing, another_thing) do { \
-    pid_t pid; fork_and_do(pid, thing, another_thing); \
-} while (0)
-
 static int is_process_alive(const pid_t pid) {
     return kill(pid, 0) == 0 || errno == EPERM;
+}
+
+extern char** environ;
+
+static void i0_run_wait(const char* path) {
+    pid_t pid;
+    char* argv[] = { (char*)path, NULL };
+
+    if (posix_spawn(&pid, path, NULL, NULL, argv, environ) != 0) {
+        i0_perror("posix_spawn()");
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (status != 0) {
+        i0_log(I0_LOG_CRITICAL, "%s", i0_lang[I0_LANG_ERROR_START_FAIL]);
+    }
 }
 
 // =========================================== //
 // string work                                 //
 // =========================================== //
 
-static void i0_string_append(char *dest, size_t dest_size, const char *suff, size_t suff_size) {
+static void i0_string_append(char* dest, size_t dest_size, const char* suff, size_t suff_size) {
     if (dest_size + suff_size + 1 > sizeof(i0_string)) {
         i0_log(I0_LOG_CRITICAL, "%s", i0_lang[I0_LANG_ERROR_BUFFER_OVERFLOW]);
     }
@@ -175,10 +190,8 @@ static int dir_exists(const char* path) {
 }
 
 static void safe_mkdir(i0_string path) {
-    if (!dir_exists(path)) {
-        if (mkdir(path, 0755) != 0) {
+    if (mkdir(path, 0755) != 0 && errno != EEXIST) {
             i0_perror("mkdir()");
-        }
     }
 }
 
@@ -201,7 +214,7 @@ static int unlink_cb(const char* fpath, const struct stat* _1, int _2, struct FT
     return ret;
 }
 
-static int rmdir_rf(const char *path) {
+static int rmdir_rf(const char* path) {
     return nftw(path, unlink_cb, 64, FTW_DEPTH | FTW_PHYS);
 }
 
@@ -314,7 +327,8 @@ static void i0_task_find(const char* name, i0_string path) {
     }
 }
 
-static void i0_task_new() {
+// this code is ass but there's nothing i can do
+_Noreturn static void i0_task_new() {
     i0_string task_name;
     i0_read_prompt(task_name, i0_lang[I0_LANG_NEW_NAME], 1);
 
@@ -333,7 +347,7 @@ static void i0_task_new() {
 
     if (dir_exists(task_path)) {
         rewrite = i0_prompt_yesno(i0_no, i0_lang[I0_LANG_NEW_TASK_ALREADY_EXISTS], task_path);
-        if (!rewrite) return;
+        if (!rewrite) exit(EXIT_SUCCESS);
     }
 
     i0_string task_command;
@@ -545,6 +559,7 @@ static void i0_task_new() {
 
     task_path[task_path_size] = '\0';
     i0_log(I0_LOG_GOOD, i0_lang[I0_LANG_NEW_TASK_CREATED], task_path);
+    exit(EXIT_SUCCESS);
 }
 
 static void i0_task_start(const char* task) {
@@ -562,7 +577,7 @@ static void i0_task_start(const char* task) {
     }
 
     pid_t pid;
-    fork_and_do(pid, safe_execlp("./main", task, NULL), open_write_int("./pid", pid));
+    fork_and_do(pid, safe_execlp("./main", "./main", NULL), open_write_int("./pid", pid));
 
     i0_log(I0_LOG_TASK_START, i0_lang[I0_LANG_STATUS_STARTED], task);
 }
@@ -573,7 +588,7 @@ static void i0_task_start_script(const char* task, const char* path) {
     }
 
     if (file_exists("./start")) {
-        safe_execlp("./start", task, NULL);
+        i0_run_wait("./start");
         return;
     }
 
@@ -627,7 +642,7 @@ static void i0_task_stop_script(const char* task, const char* path) {
     }
 
     if (file_exists("./stop")) {
-        safe_execlp("./stop", task, NULL);
+        i0_run_wait("./stop");
         return;
     }
 
@@ -696,7 +711,7 @@ static void i0_task_status_script(const char* task, const char* path) {
     }
 
     if (file_exists("./status")) {
-        safe_execlp("./status", task, NULL);
+        i0_run_wait("./status");
         return;
     }
 
@@ -704,14 +719,16 @@ static void i0_task_status_script(const char* task, const char* path) {
 }
 
 static void i0_boot_scan(i0_string path) {
+    // path == "/tasks/\0"
     DIR* d = opendir(path);
     if (!d) {
         if (errno == ENOENT) return;
         i0_perror("opendir()");
     }
 
-    struct dirent* dir;
     const size_t path_len = strlen(path);
+
+    struct dirent* dir;
     while ((dir = readdir(d)) != NULL) {
         const char* filename = dir->d_name;
 
@@ -722,36 +739,34 @@ static void i0_boot_scan(i0_string path) {
         const size_t filename_len = strlen(filename);
 
         i0_string_append(path, path_len, filename, filename_len + 1);
-        if (dir_exists(path)) {
-            const size_t path_filename_len = path_len + filename_len;
-            i0_string_append(path, path_filename_len, "/enabled", conststrlen("/enabled") + 1);
+        if (!dir_exists(path)) {
+            continue;
+        }
+        // path == "/tasks/task\0"
 
-            if (file_exists(path)) {
-                fork_and_do_no_pid(i0_task_start_script(dir->d_name, path), ;);
-            }
+        const size_t path_filename_len = path_len + filename_len;
+        i0_string_append(path, path_filename_len, "/enabled", conststrlen("/enabled") + 1);
+        // path == "/tasks/task/enabled\0"
+
+        if (file_exists(path)) {
+            i0_task_start_script(dir->d_name, path);
         }
     }
     closedir(d);
 }
 
-static void i0_boot() {
+_Noreturn static void i0_boot() {
     i0_log(I0_LOG_INFO, "%s", i0_lang[I0_LANG_BOOT_START]);
 
     i0_string path;
-
     i0_get_tasks_dir(path);
     i0_boot_scan(path);
 
     i0_log(I0_LOG_INFO, "%s", i0_lang[I0_LANG_BOOT_END]);
+    exit(EXIT_SUCCESS);
 }
 
 #define i0_task_find_and_do(task, thing) do { \
-    i0_string path; \
-    i0_task_find(task, path); \
-    fork_and_do_no_pid(thing(task, path), ;); \
-} while (0)
-
-#define i0_task_find_and_do_no_fork(task, thing) do { \
     i0_string path; \
     i0_task_find(task, path); \
     thing(task, path); \
@@ -778,12 +793,10 @@ int main(const int argc, const char* argv[]) {
             i0_log(I0_LOG_CRITICAL, "%s", i0_lang[I0_LANG_ERROR_BOOT_NO_PERMISSION]);
         }
         i0_boot();
-        return EXIT_SUCCESS;
     }
 
     if (str_eq(argv[1], "new")) {
         i0_task_new();
-        return EXIT_SUCCESS;
     }
 
     if (str_eq(argv[1], "start")) {
@@ -806,7 +819,7 @@ int main(const int argc, const char* argv[]) {
         if (argc < 3) {
             i0_log(I0_LOG_CRITICAL, "%s", i0_lang[I0_LANG_ERROR_NO_STATUS_ARG]);
         }
-        i0_task_find_and_do_no_fork(argv[2], i0_task_status_script);
+        i0_task_find_and_do(argv[2], i0_task_status_script);
         return EXIT_SUCCESS;
     }
 
