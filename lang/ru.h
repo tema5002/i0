@@ -17,6 +17,7 @@ static void io_lang_use_ru() {
     i0_lang[I0_LANG_ERROR_MAIN_NOT_FOUND] = "ошибка: main скрипт не найден";
     i0_lang[I0_LANG_ERROR_BUFFER_OVERFLOW] = "ошибка: переполнение буфера";
     i0_lang[I0_LANG_ERROR_NO_HOME] = "ошибка: переменная окружения HOME не установлена";
+    i0_lang[I0_LANG_ERROR_START_FAIL] = "ошибка: не удалось запустить start скрипт";
 
     i0_lang[I0_LANG_IO_Y_UPPERCASE] = "Д";
     i0_lang[I0_LANG_IO_Y_LOWERCASE] = "д";
